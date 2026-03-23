@@ -1,0 +1,41 @@
+/* --- GLOBAL BASE STYLES --- */
+html {
+  box-sizing: border-box;
+  font-size: 16px;
+}
+*, *:before, *:after {
+  box-sizing: inherit;
+}
+
+body {
+  margin: 0;
+  font-family: 'Segoe UI', Arial, Helvetica, sans-serif;
+  background: #f5f9ff;
+}
+
+.App {
+  min-height: 100vh;
+  /* background: #f5f9ff;  <-- Only needed if you want to override body background */
+}
+
+a {
+  text-decoration: none;
+  color: #0072ff;
+  transition: color 0.2s;
+}
+a:hover, a:focus {
+  text-decoration: underline;
+  color: #0057b7;
+}
+
+input, button {
+  font-family: inherit;
+  outline: none;
+}
+input:focus, button:focus {
+  box-shadow: 0 0 0 2px #0072ff33;
+}
+
+.main-content {
+  padding: 1rem 0;
+}

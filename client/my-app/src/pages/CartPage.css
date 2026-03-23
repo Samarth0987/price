@@ -1,0 +1,203 @@
+/* 🔥 CartPage.css — modern premium styling */
+
+/* Layout Container */
+.cart-container {
+  padding: 1.5rem 1rem;
+  max-width: 1200px;
+  margin-left: auto;
+  margin-right: auto;
+  background-color: #f9fafb;
+  min-height: 100vh;
+}
+
+@media (min-width: 768px) {
+  .cart-container {
+    padding-left: 2rem;
+    padding-right: 2rem;
+  }
+}
+
+/* Headings */
+.cart-container h2,
+.cart-container h3 {
+  color: #1f2937;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+/* Card Styles */
+.cart-item {
+  background: #ffffff;
+  border-radius: 1rem;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.07);
+  transition: all 0.3s ease;
+  overflow: hidden;
+}
+
+.cart-item:hover {
+  transform: translateY(-3px) scale(1.01);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+/* Product Text */
+.cart-item span {
+  color: #111827;
+}
+
+.cart-item .price {
+  color: #10b981;
+  font-weight: 700;
+}
+
+/* Quantity Buttons */
+.cart-item button {
+  cursor: pointer;
+  font-weight: 600;
+  transition: background-color 0.25s ease, transform 0.2s ease;
+}
+
+.cart-item button:hover {
+  transform: scale(1.05);
+}
+
+.cart-item .qty-btn {
+  background: #e5e7eb;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 1rem;
+}
+
+.cart-item .qty-btn:hover {
+  background: #d1d5db;
+}
+
+/* Remove Button */
+.remove-btn {
+  color: #ef4444;
+  font-weight: 600;
+  transition: all 0.25s ease;
+}
+
+.remove-btn:hover {
+  color: #dc2626;
+  transform: scale(1.05);
+}
+
+/* Store Label Chips */
+.store-chip {
+  background: #f3f4f6;
+  color: #374151;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 0.875rem;
+  display: inline-block;
+  transition: background-color 0.25s ease;
+}
+
+.store-chip:hover {
+  background: #e5e7eb;
+}
+
+/* Store Totals Section */
+.store-card {
+  position: relative;
+  background: white;
+  border-radius: 1rem;
+  padding: 1rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  transition: all 0.3s ease;
+}
+
+.store-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+}
+
+.store-card.best {
+  background: #dcfce7;
+  border: 2px solid #22c55e;
+}
+
+.store-card.best::after {
+  content: "🏆 Best Deal";
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  background: linear-gradient(to right, #16a34a, #22c55e);
+  color: white;
+  font-weight: 600;
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+/* Empty Cart */
+.empty-cart {
+  text-align: center;
+  padding: 3rem;
+  background: #f3f4f6;
+  border-radius: 1rem;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.05);
+}
+
+.empty-cart p {
+  color: #6b7280;
+  font-size: 1.1rem;
+}
+
+/* Buttons */
+.btn-primary {
+  background: #2563eb;
+  color: white;
+  font-weight: 600;
+  padding: 0.6rem 1.2rem;
+  border-radius: 0.6rem;
+  transition: background 0.3s ease, transform 0.2s ease;
+}
+
+.btn-primary:hover {
+  background: #1d4ed8;
+  transform: translateY(-1px);
+}
+
+.btn-danger {
+  background: #ef4444;
+  color: white;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  transition: background 0.3s ease, transform 0.2s ease;
+}
+
+.btn-danger:hover {
+  background: #dc2626;
+  transform: translateY(-1px);
+}
+
+/* Text Utilities */
+.text-muted {
+  color: #6b7280;
+}
+
+.text-green {
+  color: #16a34a;
+  font-weight: 600;
+}
+
+/* Smooth fade-in animation */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.cart-item,
+.store-card {
+  animation: fadeInUp 0.3s ease both;
+}
