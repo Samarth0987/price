@@ -1,22 +1,48 @@
-import os
-import re
-from typing import List, Optional
-
-import requests
-from dotenv import load_dotenv
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from bs4 import BeautifulSoup
+from typing import List, Optional
+import concurrent.futures
+import os
+import re
+import time
 
+# 🛒 Scrapers
+from scrapers.amazon_selenium import search_amazon_selenium
+from scrapers.flipkart_selenium import search_flipkart_selenium
+from scrapers.myntra_selenium import search_myntra_selenium
+from scrapers.ajio_selenium import search_ajio_selenium
+
+# 💾 Database
+from services.db_service import save_products
+
+# ---------------- MODELS ----------------
+
+SUPPORTED_STORES = ["Amazon", "Flipkart", "Myntra", "Ajio"]
+QUERY_CACHE = {}
+CACHE_TTL_SECONDS = int(os.getenv("QUERY_CACHE_TTL_SECONDS", "300"))
+STOP_WORDS = {
+    "a", "an", "and", "are", "at", "buy", "by", "for", "from", "in", "of",
+    "on", "or", "the", "to", "with",
+}
+GENERIC_PRODUCT_TOKENS = {
+    "analog", "analogue", "black", "blue", "boys", "brown", "casual",
+    "digital", "dial", "edition", "gold", "green", "grey", "men", "modern",
+    "pack", "pink", "quartz", "rose", "silver", "smart", "smartwatch",
+    "sports", "steel", "stainless", "strap", "style", "toned", "unisex",
+    "watch", "watches", "white", "women", "wrist", "youth",
+}
 
 class Offer(BaseModel):
     store: str
-    price: float
+    price: Optional[float] = None
     currency: str = "₹"
-    rating: float
-    reviewCount: int
-    sentiment: str  # "Good" | "Medium" | "Bad"
+    rating: Optional[float] = None
+    reviewCount: Optional[int] = None
+    title: Optional[str] = None
+    url: Optional[str] = None
+    sentiment: str
+    available: bool = True
 
 
 class Product(BaseModel):
@@ -30,99 +56,9 @@ class ReviewResponse(BaseModel):
     products: List[Product]
 
 
-class AmazonParseRequest(BaseModel):
-    """
-    Provide HTML of an Amazon product page (saved/exported HTML).
-    """
-    html: str
-
-
-class AmazonParseResponse(BaseModel):
-    title: Optional[str] = None
-    price: Optional[float] = None
-    currency: str = "₹"
-    rating: Optional[float] = None
-    reviewCount: Optional[int] = None
-
-
-def _parse_price_to_float(text: str) -> Optional[float]:
-    if not text:
-        return None
-    cleaned = (
-        text.replace("₹", "")
-        .replace(",", "")
-        .replace("\u20b9", "")
-        .strip()
-    )
-    # grab first number-like token
-    m = re.search(r"(\d+(?:\.\d+)?)", cleaned)
-    if not m:
-        return None
-    try:
-        return float(m.group(1))
-    except ValueError:
-        return None
-
-
-def parse_amazon_product_html(html: str) -> AmazonParseResponse:
-    """
-    Parse details from an Amazon product HTML document that the user saved.
-    This does NOT fetch Amazon directly.
-    """
-    soup = BeautifulSoup(html, "html.parser")
-
-    title = None
-    title_el = soup.select_one("#productTitle")
-    if title_el:
-        title = title_el.get_text(" ", strip=True)
-
-    # Price: try a few common selectors
-    price_text = None
-    for sel in ["span.a-price span.a-offscreen", "#priceblock_ourprice", "#priceblock_dealprice"]:
-        el = soup.select_one(sel)
-        if el and el.get_text(strip=True):
-            price_text = el.get_text(" ", strip=True)
-            break
-    price = _parse_price_to_float(price_text or "")
-
-    # Rating: sometimes in data-hook
-    rating = None
-    rating_el = soup.select_one("span[data-hook='rating-out-of-text']")
-    if rating_el:
-        # e.g. "4.5 out of 5"
-        m = re.search(r"(\d+(?:\.\d+)?)", rating_el.get_text(" ", strip=True))
-        if m:
-            rating = float(m.group(1))
-
-    if rating is None:
-        alt = soup.select_one("i[data-hook='average-star-rating'] span.a-icon-alt")
-        if alt:
-            m = re.search(r"(\d+(?:\.\d+)?)", alt.get_text(" ", strip=True))
-            if m:
-                rating = float(m.group(1))
-
-    # Review count
-    review_count = None
-    rc_el = soup.select_one("span[data-hook='total-review-count']")
-    if rc_el:
-        txt = rc_el.get_text(" ", strip=True).replace(",", "")
-        m = re.search(r"(\d+)", txt)
-        if m:
-            review_count = int(m.group(1))
-
-    return AmazonParseResponse(
-        title=title,
-        price=price,
-        currency="₹",
-        rating=rating,
-        reviewCount=review_count,
-    )
-
+# ---------------- BUSINESS LOGIC ----------------
 
 def classify_sentiment(rating: float, review_count: int) -> str:
-    """
-    Convert numeric rating + review count into Good / Medium / Bad.
-    """
     if rating >= 4.2 and review_count >= 100:
         return "Good"
     if rating >= 3.5:
@@ -130,247 +66,361 @@ def classify_sentiment(rating: float, review_count: int) -> str:
     return "Bad"
 
 
-def _parse_first_float(val) -> Optional[float]:
-    if val is None:
-        return None
-    if isinstance(val, (int, float)):
-        return float(val)
-    if isinstance(val, str):
-        m = re.search(r"(\d+(?:\.\d+)?)", val)
-        if m:
-            try:
-                return float(m.group(1))
-            except ValueError:
-                return None
-    return None
+def build_unavailable_offer(store: str) -> Offer:
+    return Offer(
+        store=store,
+        price=None,
+        rating=None,
+        reviewCount=None,
+        title=None,
+        url=None,
+        sentiment="Unavailable",
+        available=False,
+    )
 
 
-def _parse_first_int(val) -> Optional[int]:
-    if val is None:
-        return None
-    if isinstance(val, int):
-        return val
-    if isinstance(val, float):
-        return int(val)
-    if isinstance(val, str):
-        # handles "1,234", "1,234 ratings", etc.
-        m = re.search(r"(\d[\d,]*)", val)
-        if m:
-            try:
-                return int(m.group(1).replace(",", ""))
-            except ValueError:
-                return None
-    return None
+def tokenize(text: str) -> List[str]:
+    return [token for token in re.findall(r"[a-z0-9]+", (text or "").lower()) if token not in STOP_WORDS]
 
 
-def fetch_reviews_from_sites(query: str) -> List[Product]:
-    """
-    Third‑party implementation using SerpAPI Google Shopping.
-    Returns product offers for Amazon/Flipkart/Ajio/Myntra when present.
-    """
-    q = (query or "").strip() or "iphone"
+def informative_tokens(text: str) -> List[str]:
+    tokens = tokenize(text)
+    filtered = [
+        token for token in tokens
+        if token not in GENERIC_PRODUCT_TOKENS and (len(token) > 2 or any(ch.isdigit() for ch in token))
+    ]
+    if filtered:
+        return filtered
+    longer_tokens = [token for token in tokens if len(token) > 2]
+    return longer_tokens or tokens
 
-    api_key = os.getenv("SERPAPI_KEY") or ""
-    if not api_key:
-        # No key: return empty so user knows config missing
-        return [Product(product_id=1, name=q, offers=[])]
 
-    params = {
-        "engine": "google_shopping",
-        "q": q,
-        "gl": "in",
-        "hl": "en",
-        "api_key": api_key,
-    }
+def jaccard_similarity(left_tokens: List[str], right_tokens: List[str]) -> float:
+    left = set(left_tokens)
+    right = set(right_tokens)
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
 
-    try:
-        resp = requests.get("https://serpapi.com/search.json", params=params, timeout=20)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:
-        # If the environment blocks outgoing requests, don't crash the API.
-        # Return demo offers so the frontend always has something to show.
-        print(f"SerpAPI request failed: {exc}")
-        raw_offers = [
-            {"store": "Amazon", "price": 999, "rating": 4.5, "reviews": 235},
-            {"store": "Flipkart", "price": 979, "rating": 4.3, "reviews": 180},
-            {"store": "Myntra", "price": 1049, "rating": 3.9, "reviews": 95},
-            {"store": "Ajio", "price": 949, "rating": 3.4, "reviews": 60},
-        ]
-        offers = [
-            Offer(
-                store=raw["store"],
-                price=raw["price"],
-                currency="₹",
-                rating=raw["rating"],
-                reviewCount=raw["reviews"],
-                sentiment=classify_sentiment(raw["rating"], raw["reviews"]),
-            )
-            for raw in raw_offers
-        ]
-        return [Product(product_id=1, name=q, offers=offers)]
 
-    shopping_results = data.get("shopping_results") or []
+def model_token_overlap(left_tokens: List[str], right_tokens: List[str]) -> float:
+    left = {token for token in left_tokens if any(ch.isdigit() for ch in token) or len(token) >= 5}
+    right = {token for token in right_tokens if any(ch.isdigit() for ch in token) or len(token) >= 5}
+    if not left or not right:
+        return 0.0
+    return len(left & right) / max(len(left), len(right))
 
-    # We only care about these brands/sites; normalize matching by merchant/source
-    target_sites = {
-        "amazon": "Amazon",
-        "flipkart": "Flipkart",
-        "ajio": "Ajio",
-        "myntra": "Myntra",
-    }
 
-    offers_by_store: dict[str, Offer] = {}
-    product_name = q
+def query_match_score(query: str, item: dict) -> float:
+    query_tokens = informative_tokens(query)
+    title_tokens = informative_tokens(item.get("title", ""))
+    base = jaccard_similarity(query_tokens, title_tokens)
+    model_bonus = 0.5 * model_token_overlap(query_tokens, title_tokens)
+    substring_bonus = 0.25 if query.strip().lower() in item.get("title", "").lower() else 0.0
+    position = int(item.get("position", 99) or 99)
+    position_bonus = max(0.0, (6 - position) * 0.07)
+    return base + model_bonus + substring_bonus + position_bonus
 
-    def parse_price_value(obj) -> Optional[float]:
-        if obj is None:
-            return None
-        if isinstance(obj, (int, float)):
-            return float(obj)
-        if isinstance(obj, str):
-            return _parse_price_to_float(obj)
+
+def pair_match_score(anchor: dict, item: dict) -> float:
+    anchor_tokens = informative_tokens(anchor.get("title", ""))
+    item_tokens = informative_tokens(item.get("title", ""))
+    base = jaccard_similarity(anchor_tokens, item_tokens)
+    model_bonus = 0.6 * model_token_overlap(anchor_tokens, item_tokens)
+    brand_bonus = 0.0
+    anchor_title_tokens = tokenize(anchor.get("title", ""))
+    item_title_tokens = tokenize(item.get("title", ""))
+    if anchor_title_tokens and item_title_tokens and anchor_title_tokens[0] == item_title_tokens[0]:
+        brand_bonus = 0.15
+    return base + model_bonus + brand_bonus
+
+
+def is_specific_query(query: str) -> bool:
+    tokens = informative_tokens(query)
+    return len(tokens) >= 2 or any(any(ch.isdigit() for ch in token) for token in tokens)
+
+
+def item_key(item: dict) -> str:
+    return item.get("url") or f"{item.get('store')}::{item.get('title')}::{item.get('position')}"
+
+
+def combined_match_score(query: str, anchor: dict, item: dict) -> float:
+    return (0.65 * pair_match_score(anchor, item)) + (0.35 * query_match_score(query, item))
+
+
+def choose_anchor_item(query: str, results_by_store: dict, available_keys: Optional[set] = None) -> Optional[dict]:
+    all_items = [item for items in results_by_store.values() for item in items]
+    if not all_items:
         return None
 
-    for item in shopping_results:
-        try:
-            title = item.get("title") or ""
-            if title and product_name == q:
-                product_name = title
+    best_anchor = None
+    best_score = -1.0
 
-            source = (item.get("source") or item.get("merchant") or "").lower()
-            link = (item.get("link") or "").lower()
-            hay = f"{source} {link}"
+    for candidate in all_items:
+        if available_keys is not None and item_key(candidate) not in available_keys:
+            continue
+        coverage = 1
+        score = query_match_score(query, candidate)
 
-            matched_store = None
-            for key, label in target_sites.items():
-                if key in hay:
-                    matched_store = label
-                    break
-            if not matched_store:
+        for store, items in results_by_store.items():
+            if store == candidate.get("store"):
                 continue
-
-            price_value = (
-                parse_price_value(item.get("extracted_price"))
-                or parse_price_value(item.get("price"))
-                or parse_price_value(item.get("formatted_price"))
-            )
-            if price_value is None:
+            store_candidates = [
+                item for item in items
+                if available_keys is None or item_key(item) in available_keys
+            ]
+            if not store_candidates:
                 continue
+            best_store_score = max(combined_match_score(query, candidate, item) for item in store_candidates)
+            if best_store_score >= 0.2:
+                coverage += 1
+                score += best_store_score
 
-            rating = (
-                _parse_first_float(item.get("rating"))
-                or _parse_first_float(item.get("average_rating"))
-                or 0.0
-            )
-            review_count = (
-                _parse_first_int(item.get("reviews"))
-                or _parse_first_int(item.get("review_count"))
-                or 0
-            )
-            sentiment = classify_sentiment(rating, review_count)
+        candidate_score = (coverage * 10) + score
+        if candidate_score > best_score:
+            best_score = candidate_score
+            best_anchor = candidate
 
-            # Keep the best offer per store (prefer good sentiment, then higher rating, then lower price)
-            existing = offers_by_store.get(matched_store)
-            candidate = Offer(
-                store=matched_store,
-                price=float(price_value),
-                currency="₹",
-                rating=rating,
-                reviewCount=review_count,
-                sentiment=sentiment,
-            )
-            if not existing:
-                offers_by_store[matched_store] = candidate
-            else:
-                order = {"Good": 0, "Medium": 1, "Bad": 2}
-                a = (order.get(candidate.sentiment, 1), -candidate.rating, candidate.price)
-                b = (order.get(existing.sentiment, 1), -existing.rating, existing.price)
-                if a < b:
-                    offers_by_store[matched_store] = candidate
+    return best_anchor
 
-            if len(offers_by_store) == 4:
-                break
-        except Exception:
-            # If SerpAPI returns an unexpected field type, skip this item
+
+def build_results_by_store(results: List[dict]) -> dict:
+    results_by_store = {store: [] for store in SUPPORTED_STORES}
+    for item in results:
+        store = item.get("store")
+        if store in results_by_store:
+            results_by_store[store].append(item)
+
+    return results_by_store
+
+
+def select_best_matches(query: str, results: List[dict]) -> dict:
+    results_by_store = build_results_by_store(results)
+    if not any(results_by_store.values()):
+        return {}
+
+    if not is_specific_query(query):
+        selected = {}
+        for store, items in results_by_store.items():
+            if not items:
+                continue
+            selected[store] = max(
+                items,
+                key=lambda item: (query_match_score(query, item), -int(item.get("position", 99) or 99)),
+            )
+        return selected
+
+    anchor = choose_anchor_item(query, results_by_store)
+    if not anchor:
+        return {}
+
+    selected = {}
+    for store, items in results_by_store.items():
+        if not items:
             continue
 
-    offers = list(offers_by_store.values())
-    if not offers:
-        # Safe fallback so the UI doesn't show "0 products found"
-        raw_offers = [
-            {"store": "Amazon", "price": 999, "rating": 4.5, "reviews": 235},
-            {"store": "Flipkart", "price": 979, "rating": 4.3, "reviews": 180},
-            {"store": "Myntra", "price": 1049, "rating": 3.9, "reviews": 95},
-            {"store": "Ajio", "price": 949, "rating": 3.4, "reviews": 60},
-        ]
+        if store == anchor.get("store"):
+            selected[store] = anchor
+            continue
+
+        best_item = max(
+            items,
+            key=lambda item: combined_match_score(query, anchor, item),
+        )
+        best_score = combined_match_score(query, anchor, best_item)
+        if best_score >= 0.2:
+            selected[store] = best_item
+
+    return selected
+
+
+def build_product_name(query: str, group_items: List[dict], anchor: Optional[dict]) -> str:
+    if anchor and anchor.get("title"):
+        return anchor["title"]
+
+    titles = [item.get("title") for item in group_items if item.get("title")]
+    if not titles:
+        return query
+
+    if is_specific_query(query):
+        return max(titles, key=len)
+
+    return max(titles, key=lambda title: query_match_score(query, {"title": title, "position": 1}))
+
+
+def build_product_groups(query: str, results: List[dict]) -> List[Product]:
+    results_by_store = build_results_by_store(results)
+    if not any(results_by_store.values()):
+        return []
+
+    available_keys = {
+        item_key(item)
+        for items in results_by_store.values()
+        for item in items
+    }
+    groups = []
+    max_groups = int(os.getenv("MAX_PRODUCT_GROUPS", "12"))
+    match_threshold = 0.2 if is_specific_query(query) else 0.12
+    product_id = 1
+
+    while available_keys and len(groups) < max_groups:
+        anchor = choose_anchor_item(query, results_by_store, available_keys)
+        if not anchor:
+            break
+
+        group_by_store = {anchor["store"]: anchor}
+        available_keys.discard(item_key(anchor))
+
+        for store in SUPPORTED_STORES:
+            if store == anchor.get("store"):
+                continue
+
+            candidates = [
+                item for item in results_by_store.get(store, [])
+                if item_key(item) in available_keys
+            ]
+            if not candidates:
+                continue
+
+            best_item = max(candidates, key=lambda item: combined_match_score(query, anchor, item))
+            if combined_match_score(query, anchor, best_item) >= match_threshold:
+                group_by_store[store] = best_item
+                available_keys.discard(item_key(best_item))
+
+        group_items = list(group_by_store.values())
         offers = [
-            Offer(
-                store=raw["store"],
-                price=raw["price"],
-                currency="₹",
-                rating=raw["rating"],
-                reviewCount=raw["reviews"],
-                sentiment=classify_sentiment(raw["rating"], raw["reviews"]),
-            )
-            for raw in raw_offers
+            build_offer(group_by_store[store]) if store in group_by_store else build_unavailable_offer(store)
+            for store in SUPPORTED_STORES
         ]
+        groups.append(
+            Product(
+                product_id=product_id,
+                name=build_product_name(query, group_items, anchor),
+                offers=offers,
+            )
+        )
+        product_id += 1
 
-    return [Product(product_id=1, name=product_name, offers=offers)]
+    return groups
 
 
-app = FastAPI(title="Review‑based Price Comparison API")
+def build_offer(item: dict) -> Offer:
+    rating = float(item.get("rating", 0) or 0)
+    review_count = int(item.get("reviews", 0) or 0)
+    return Offer(
+        store=item.get("store", ""),
+        price=float(item["price"]),
+        rating=rating,
+        reviewCount=review_count,
+        title=item.get("title"),
+        url=item.get("url"),
+        sentiment=classify_sentiment(rating, review_count),
+        available=True,
+    )
 
-# Load .env if present (SERPAPI_KEY)
-load_dotenv()
+
+def build_product_offers(query: str, results: List[dict]) -> List[Product]:
+    products = build_product_groups(query, results)
+    available_offers = [
+        offer
+        for product in products
+        for offer in product.offers
+        if offer.available and offer.price is not None
+    ]
+
+    if available_offers:
+        best_offer = min(available_offers, key=lambda offer: offer.price)
+        print(f"🔥 Best Deal: {best_offer.store} - ₹{best_offer.price}")
+        return products
+
+    print(f"⚠️ No live offers found for '{query}'")
+    return [
+        Product(
+            product_id=1,
+            name=query,
+            offers=[build_unavailable_offer(store) for store in SUPPORTED_STORES],
+        )
+    ]
+
+
+def fetch_reviews_from_sites(query: str):
+    normalized_query = query.strip().lower()
+    cached_entry = QUERY_CACHE.get(normalized_query)
+    if cached_entry and time.time() - cached_entry["timestamp"] < CACHE_TTL_SECONDS:
+        return cached_entry["products"]
+
+    results = []
+    scrape_timeout = float(os.getenv("SCRAPE_TIMEOUT_SECONDS", "12"))
+    executor = concurrent.futures.ThreadPoolExecutor()
+    futures = [
+        executor.submit(search_amazon_selenium, query),
+        executor.submit(search_flipkart_selenium, query),
+        executor.submit(search_myntra_selenium, query),
+        executor.submit(search_ajio_selenium, query),
+    ]
+
+    # 🚀 Parallel scraping with a cap so one stuck scraper doesn't block the API forever.
+    done, not_done = concurrent.futures.wait(
+        futures,
+        timeout=scrape_timeout,
+        return_when=concurrent.futures.ALL_COMPLETED,
+    )
+
+    for future in done:
+        try:
+            results.extend(future.result())
+        except Exception as e:
+            print("❌ Scraper error:", e)
+
+    for future in not_done:
+        future.cancel()
+
+    if not_done:
+        print(f"⚠️ Scraper timeout after {scrape_timeout}s, using partial/fallback results")
+
+    executor.shutdown(wait=False, cancel_futures=True)
+
+    # 💾 Save data to Supabase
+    if results:
+        try:
+            save_products(query, results)
+        except Exception as e:
+            print("❌ Database error:", e)
+
+    products = build_product_offers(query, results)
+    QUERY_CACHE[normalized_query] = {
+        "timestamp": time.time(),
+        "products": products,
+    }
+    return products
+
+
+# ---------------- FASTAPI SETUP ----------------
+
+app = FastAPI(title="Price Lens API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+# ---------------- ROUTES ----------------
+
 @app.get("/")
-async def root():
-    return {
-        "ok": True,
-        "message": "Backend running. Use /api/reviews?query=... or /docs",
-    }
+def root():
+    return {"message": "Price Lens Backend Running 🚀"}
+
 
 @app.get("/api/health")
-async def health():
-    return {"ok": True}
+def health():
+    return {"status": "ok"}
 
 
 @app.get("/api/reviews", response_model=ReviewResponse)
-async def get_review_based_prices(
-    query: str = Query(..., description="Product name user searched for"),
-) -> ReviewResponse:
-    """
-    Main endpoint used by the React frontend.
-
-    Input:  ?query=iphone+15
-    Output: list of products with offers per site, including:
-      - price
-      - rating / reviewCount
-      - sentiment (Good / Medium / Bad)
-    """
+def get_reviews(query: str = Query(...)):
     products = fetch_reviews_from_sites(query)
     return ReviewResponse(query=query, products=products)
-
-
-@app.post("/api/parse/amazon", response_model=AmazonParseResponse)
-async def parse_amazon(req: AmazonParseRequest) -> AmazonParseResponse:
-    """
-    Parse an Amazon product page HTML that the user saved locally.
-    """
-    return parse_amazon_product_html(req.html)
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run("main:app", host="0.0.0.0", port=8002, reload=True)
-

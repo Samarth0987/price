@@ -61,16 +61,23 @@ function App() {
 
   // Add item to cart logic
   const handleAddToCart = (product) => {
+    const cartItemId = [
+      product.name,
+      ...(product.offers || []).map(
+        (offer) => offer.url || `${offer.store}:${offer.price ?? "na"}`
+      ),
+    ].join("|");
+
     setCart((prevCart) => {
-      const existing = prevCart.find((item) => item.cartItemId === product.product_id);
+      const existing = prevCart.find((item) => item.cartItemId === cartItemId);
       if (existing) {
         return prevCart.map((item) =>
-          item.cartItemId === product.product_id
+          item.cartItemId === cartItemId
             ? { ...item, quantity: item.quantity + 1 }
             : item
         );
       }
-      return [...prevCart, { ...product, cartItemId: product.product_id, quantity: 1 }];
+      return [...prevCart, { ...product, cartItemId, quantity: 1 }];
     });
   };
 

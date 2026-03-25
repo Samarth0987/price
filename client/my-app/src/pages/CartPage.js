@@ -24,25 +24,56 @@ function CartPage({ cart, setPage, setCart, STORES }) {
     }
   };
 
+  const getStoreOffer = (item, storeName) =>
+    item.offers.find(
+      offer => offer.store === storeName && offer.available && offer.price != null
+    );
+
+  const openStoreProducts = storeName => {
+    const urls = Array.from(
+      new Set(
+        cart
+          .map(item => getStoreOffer(item, storeName)?.url)
+          .filter(Boolean)
+      )
+    );
+
+    if (!urls.length) {
+      window.alert(`No exact ${storeName} product links are available for your cart yet.`);
+      return;
+    }
+
+    urls.forEach(url => {
+      window.open(url, "_blank", "noopener,noreferrer");
+    });
+  };
+
   // Calculate totals per store
   const calculateStoreTotals = () => {
     const totals = {};
     // Initialize totals
-    STORES.forEach(store => (totals[store.name] = { total: 0, items: 0 }));
+    STORES.forEach(store => (
+      totals[store.name] = { total: 0, items: 0, matchedItems: 0, urls: [] }
+    ));
 
-    cart.forEach(item =>
-      item.offers.forEach(offer => {
-        if (totals[offer.store]) {
-          totals[offer.store].total += offer.price * item.quantity;
-          totals[offer.store].items += item.quantity;
+    cart.forEach(item => {
+      STORES.forEach(store => {
+        const offer = getStoreOffer(item, store.name);
+        if (offer && totals[store.name]) {
+          totals[store.name].total += offer.price * item.quantity;
+          totals[store.name].items += item.quantity;
+          totals[store.name].matchedItems += 1;
+          if (offer.url) {
+            totals[store.name].urls.push(offer.url);
+          }
         }
-      })
-    );
+      });
+    });
 
     let minTotal = Infinity;
     let bestStore = null;
     Object.entries(totals).forEach(([store, data]) => {
-      if (data.total > 0 && data.total < minTotal) {
+      if (data.matchedItems === cart.length && data.total > 0 && data.total < minTotal) {
         minTotal = data.total;
         bestStore = store;
       }
@@ -115,53 +146,88 @@ function CartPage({ cart, setPage, setCart, STORES }) {
 
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
                   {item.offers.map(offer => (
-                    <span key={offer.store} className="store-chip">
-                      {offer.store}: <span className="price">₹{offer.price}</span>
-                    </span>
+                    <a
+                      key={offer.store}
+                      href={offer.available && offer.url ? offer.url : undefined}
+                      target={offer.available && offer.url ? "_blank" : undefined}
+                      rel={offer.available && offer.url ? "noopener noreferrer" : undefined}
+                      className="store-chip"
+                      style={{
+                        textDecoration: "none",
+                        opacity: offer.available ? 1 : 0.65,
+                        pointerEvents: offer.available && offer.url ? "auto" : "none",
+                      }}
+                      title={
+                        offer.available && offer.url
+                          ? `Open ${offer.store} product`
+                          : `${offer.store} product not available`
+                      }
+                    >
+                      {offer.store}:{" "}
+                      <span className="price">
+                        {offer.available && offer.price != null ? `₹${offer.price}` : "N/A"}
+                      </span>
+                    </a>
                   ))}
                 </div>
               </div>
             ))}
           </div>
 
-          {/* Totals Summary (Clickable Links) */}
+          {/* Totals Summary */}
           <h3>Total Cart Value by Store</h3>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "1.2rem" }}>
             {Object.entries(totals).map(([storeName, data]) => {
-              // Find URL from STORES array
-              const storeObj = STORES.find(s => s.name === storeName);
-              const storeUrl = storeObj ? storeObj.url : "#";
+              const cartCovered = data.matchedItems === cart.length;
 
               return (
-                <a
+                <button
                   key={storeName}
-                  href={storeUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  onClick={() => openStoreProducts(storeName)}
+                  disabled={!cartCovered}
                   className={`store-card${storeName === bestStore ? " best" : ""}`}
                   style={{ 
-                    textDecoration: "none", 
-                    color: "inherit", 
-                    cursor: "pointer", 
-                    display: "block" 
+                    textDecoration: "none",
+                    color: "inherit",
+                    cursor: cartCovered ? "pointer" : "not-allowed",
+                    display: "block",
+                    width: "100%",
+                    border: "none",
+                    textAlign: "left",
+                    opacity: cartCovered ? 1 : 0.75,
                   }}
-                  title={`Click to visit ${storeName}`}
+                  title={
+                    cartCovered
+                      ? `Open all shown ${storeName} product pages`
+                      : `${storeName} does not have all cart items`
+                  }
                 >
                   <h4 style={{ fontWeight: 600, fontSize: "1.06rem" }}>
-                    {storeName} <span style={{ fontSize: "0.8em" }}>🔗</span>
+                    {storeName} <span style={{ fontSize: "0.8em" }}>{cartCovered ? "🔗" : "!"}</span>
                   </h4>
                   <p className="price" style={{ marginTop: "0.5rem" }}>
-                    ₹{data.total.toFixed(2)}
+                    {cartCovered ? `₹${data.total.toFixed(2)}` : "Not fully available"}
                   </p>
-                </a>
+                  <p style={{ marginTop: "0.35rem", color: "#64748b", fontSize: "0.9rem" }}>
+                    {cartCovered
+                      ? "Open exact product pages for this store"
+                      : `${data.matchedItems}/${cart.length} cart items matched`}
+                  </p>
+                </button>
               );
             })}
           </div>
 
-          <p style={{ marginTop: "2rem", fontSize: "1.08rem", color: "#166534" }}>
-            To get your cart for the <span className="text-green">lowest price (₹{minTotal.toFixed(2)})</span>,
-            click on <strong>{bestStore}</strong> above to order.
-          </p>
+          {bestStore ? (
+            <p style={{ marginTop: "2rem", fontSize: "1.08rem", color: "#166534" }}>
+              For the lowest full-cart price (<span className="text-green">₹{minTotal.toFixed(2)}</span>),
+              open <strong>{bestStore}</strong> above and you will be taken to the exact product pages shown in comparison.
+            </p>
+          ) : (
+            <p style={{ marginTop: "2rem", fontSize: "1.08rem", color: "#92400e" }}>
+              No single store has exact links for every cart item yet. You can still open the available product pages store by store above.
+            </p>
+          )}
         </>
       )}
     </div>

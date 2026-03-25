@@ -17,12 +17,27 @@ const getSentimentLabel = (rating, reviewCount) => {
 };
 
 function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' }) {
+  const storeCatalog = propsStores || MOCK_STORES;
   const [selectedStores, setSelectedStores] = useState([]);
   const [products, setProducts] = useState([]);
-  const [stores, setStores] = useState([]);
+  const [stores, setStores] = useState(storeCatalog);
   const [loading, setLoading] = useState(true);
   const [showNotification, setShowNotification] = useState(false);
   const [notificationCount, setNotificationCount] = useState(0);
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
+
+  useEffect(() => {
+    setStores(storeCatalog);
+    setSelectedStores(storeCatalog.map((store) => store.name));
+  }, [storeCatalog]);
+
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 700);
+
+    return () => clearTimeout(timeoutId);
+  }, [search]);
 
   // Fetch products + review data from Python backend whenever search changes
   useEffect(() => {
@@ -30,7 +45,7 @@ function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' })
     const run = async () => {
       setLoading(true);
 
-      const query = search && search.trim().length > 0 ? search.trim() : 'Sample Product';
+      const query = debouncedSearch && debouncedSearch.trim().length > 0 ? debouncedSearch.trim() : 'Sample Product';
       try {
         const res = await fetch(
           `http://localhost:8002/api/reviews?query=${encodeURIComponent(query)}`,
@@ -39,34 +54,40 @@ function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' })
         if (!res.ok) {
           console.error('Failed to fetch reviews', res.status);
           setProducts([]);
-          setStores(propsStores || MOCK_STORES);
-          setSelectedStores((propsStores || MOCK_STORES).map(s => s.name));
+          setStores(storeCatalog);
+          setSelectedStores(storeCatalog.map(s => s.name));
           return;
         }
         const data = await res.json();
-        const productsFromApi = data.products || [];
-        setProducts(productsFromApi);
-
-        // Derive stores from offers, fall back to props / mock
-        const uniqueStores = new Map();
-        productsFromApi.forEach((p) => {
-          (p.offers || []).forEach((offer) => {
-            if (!uniqueStores.has(offer.store)) {
-              const fallback = (propsStores || MOCK_STORES).find((s) => s.name === offer.store);
-              uniqueStores.set(offer.store, fallback || { name: offer.store, color: '#4b5563' });
-            }
-          });
+        const productsFromApi = (data.products || []).map((product) => {
+          const offersByStore = new Map((product.offers || []).map((offer) => [offer.store, offer]));
+          return {
+            ...product,
+            offers: storeCatalog.map((store) => (
+              offersByStore.get(store.name) || {
+                store: store.name,
+                price: null,
+                rating: null,
+                reviewCount: null,
+                title: null,
+                url: null,
+                sentiment: 'Unavailable',
+                available: false,
+              }
+            )),
+          };
         });
-        const storesList = Array.from(uniqueStores.values());
-        setStores(storesList.length > 0 ? storesList : (propsStores || MOCK_STORES));
-        setSelectedStores((storesList.length > 0 ? storesList : (propsStores || MOCK_STORES)).map(s => s.name));
+
+        setProducts(productsFromApi);
+        setStores(storeCatalog);
+        setSelectedStores(storeCatalog.map(s => s.name));
       } catch (err) {
         if (err.name !== 'AbortError') {
           console.error('Error talking to review backend', err);
         }
         setProducts([]);
-        setStores(propsStores || MOCK_STORES);
-        setSelectedStores((propsStores || MOCK_STORES).map(s => s.name));
+        setStores(storeCatalog);
+        setSelectedStores(storeCatalog.map(s => s.name));
       } finally {
         setLoading(false);
       }
@@ -75,7 +96,7 @@ function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' })
     run();
 
     return () => controller.abort();
-  }, [propsStores, search]);
+  }, [debouncedSearch, storeCatalog]);
 
   // Toggle store filter
   const toggleStoreFilter = (storeName) => {
@@ -189,15 +210,8 @@ function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' })
         {!loading && filteredProducts.map(product => {
           const displayOffers = (product.offers || [])
             .filter(offer => selectedStores.includes(offer.store))
-            .sort((a, b) => {
-              const sentimentOrder = { Good: 0, Medium: 1, Bad: 2 };
-              const sa = sentimentOrder[getSentimentLabel(a.rating, a.reviewCount)];
-              const sb = sentimentOrder[getSentimentLabel(b.rating, b.reviewCount)];
-
-              if (sa !== sb) return sa - sb;                   // Better sentiment first
-              if (b.rating !== a.rating) return b.rating - a.rating; // Higher rating next
-              return a.price - b.price;                        // Then cheaper
-            });
+            .sort((a, b) => stores.findIndex(store => store.name === a.store) - stores.findIndex(store => store.name === b.store));
+          const hasAvailableOffer = displayOffers.some((offer) => offer.available);
           
           return (
             <div 
@@ -232,6 +246,9 @@ function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' })
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {displayOffers.map((offer) => {
                   const storeMeta = stores.find(s => s.name === offer.store);
+                  const sentimentLabel = offer.available
+                    ? getSentimentLabel(offer.rating, offer.reviewCount)
+                    : 'Unavailable';
                   return (
                     <div
                       key={offer.store}
@@ -253,8 +270,22 @@ function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' })
                         }}>
                           {offer.store}
                         </span>
+                        {offer.available && offer.title && (
+                          <span style={{
+                            fontSize: '0.78rem',
+                            color: '#475569',
+                            maxWidth: '180px',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis'
+                          }}>
+                            {offer.title}
+                          </span>
+                        )}
                         <span style={{ fontSize: '0.8rem', color: '#6b7280' }}>
-                          {offer.rating != null ? `${offer.rating.toFixed(1)}★ · ${offer.reviewCount} reviews` : 'No rating'}
+                          {offer.available && offer.rating != null
+                            ? `${offer.rating.toFixed(1)}★ · ${offer.reviewCount} reviews`
+                            : 'Not available on this site'}
                         </span>
                       </div>
                       <div style={{ textAlign: 'right' }}>
@@ -263,7 +294,7 @@ function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' })
                           fontWeight: 'bold',
                           color: '#1f2937'
                         }}>
-                          ₹{offer.price}
+                          {offer.available && offer.price != null ? `₹${offer.price}` : 'Not available'}
                         </div>
                         <div style={{
                           fontSize: '0.8rem',
@@ -272,20 +303,41 @@ function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' })
                           borderRadius: '999px',
                           display: 'inline-block',
                           backgroundColor:
-                            getSentimentLabel(offer.rating, offer.reviewCount) === 'Good'
+                            sentimentLabel === 'Good'
                               ? '#dcfce7'
-                              : getSentimentLabel(offer.rating, offer.reviewCount) === 'Medium'
+                              : sentimentLabel === 'Medium'
                               ? '#fef9c3'
-                              : '#fee2e2',
+                              : sentimentLabel === 'Bad'
+                              ? '#fee2e2'
+                              : '#e5e7eb',
                           color:
-                            getSentimentLabel(offer.rating, offer.reviewCount) === 'Good'
+                            sentimentLabel === 'Good'
                               ? '#166534'
-                              : getSentimentLabel(offer.rating, offer.reviewCount) === 'Medium'
+                              : sentimentLabel === 'Medium'
                               ? '#854d0e'
-                              : '#991b1b'
+                              : sentimentLabel === 'Bad'
+                              ? '#991b1b'
+                              : '#4b5563'
                         }}>
-                          {getSentimentLabel(offer.rating, offer.reviewCount)} reviews
+                          {offer.available ? `${sentimentLabel} reviews` : 'Site unavailable'}
                         </div>
+                        {offer.available && offer.url && (
+                          <a
+                            href={offer.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              display: 'inline-block',
+                              marginTop: '6px',
+                              fontSize: '0.78rem',
+                              color: storeMeta?.color || '#2563eb',
+                              textDecoration: 'none',
+                              fontWeight: '600'
+                            }}
+                          >
+                            View product
+                          </a>
+                        )}
                       </div>
                     </div>
                   );
@@ -294,22 +346,27 @@ function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' })
 
               <button
                 onClick={() => handleAddToCart(product)}
+                disabled={!hasAvailableOffer}
                 style={{
-                  backgroundColor: '#10B981',
+                  backgroundColor: hasAvailableOffer ? '#10B981' : '#94a3b8',
                   color: '#fff',
                   border: 'none',
                   padding: '0.75rem',
                   borderRadius: '8px',
                   fontWeight: 'bold',
-                  cursor: 'pointer',
+                  cursor: hasAvailableOffer ? 'pointer' : 'not-allowed',
                   fontSize: '0.95rem',
                   transition: 'all 0.2s ease'
                 }}
-                onMouseEnter={(e) => { e.target.style.backgroundColor = '#059669'; }}
-                onMouseLeave={(e) => { e.target.style.backgroundColor = '#10B981'; }}
+                onMouseEnter={(e) => {
+                  if (hasAvailableOffer) e.target.style.backgroundColor = '#059669';
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.backgroundColor = hasAvailableOffer ? '#10B981' : '#94a3b8';
+                }}
                 aria-label={`Add ${product.name} to cart`}
               >
-                Add to Cart
+                {hasAvailableOffer ? 'Add to Cart' : 'Unavailable'}
               </button>
             </div>
           );
