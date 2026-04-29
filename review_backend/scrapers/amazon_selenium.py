@@ -3,10 +3,18 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import os
+import requests
 from urllib.parse import urljoin
 from utils.driver import get_driver
 
 MAX_RESULTS = int(os.getenv("SCRAPER_RESULTS_PER_STORE", "8"))
+HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-IN,en;q=0.9",
+}
 
 
 def _to_float(raw_value):
@@ -70,10 +78,78 @@ def _extract_url(item):
     return urljoin("https://www.amazon.in", best_link) if best_link else None
 
 
-def search_amazon_selenium(query):
-    driver = get_driver()
-    results = []
+def _extract_reviews(item):
+    review_node = (
+        item.select_one("span.a-size-base.s-underline-text")
+        or item.select_one("a.a-link-normal span.a-size-base")
+    )
+    return _to_reviews(review_node.get_text(strip=True) if review_node else "")
 
+
+def _collect_results_from_soup(soup):
+    results = []
+    items = soup.select("div[data-component-type='s-search-result']")
+
+    for index, item in enumerate(items, start=1):
+        price_node = item.select_one(".a-price .a-offscreen")
+        rating_node = item.select_one("span.a-icon-alt")
+
+        title = _extract_title(item)
+        url = _extract_url(item)
+        price = _to_float(price_node.get_text(strip=True) if price_node else "")
+        if not title or price is None:
+            continue
+
+        results.append({
+            "store": "Amazon",
+            "title": title,
+            "url": url,
+            "price": price,
+            "rating": _to_rating(rating_node.get_text(strip=True) if rating_node else ""),
+            "reviews": _extract_reviews(item),
+            "position": index,
+        })
+
+        if len(results) == MAX_RESULTS:
+            break
+
+    organic_results = [
+        item for item in results
+        if "/sspa/" not in (item.get("url") or "")
+    ]
+    sponsored_results = [
+        item for item in results
+        if "/sspa/" in (item.get("url") or "")
+    ]
+
+    if organic_results:
+        return (organic_results + sponsored_results)[:MAX_RESULTS]
+
+    return results
+
+
+def _search_amazon_http(query):
+    response = requests.get(
+        "https://www.amazon.in/s",
+        params={"k": query},
+        headers=HTTP_HEADERS,
+        timeout=20,
+    )
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    return _collect_results_from_soup(soup)
+
+
+def search_amazon_selenium(query):
+    try:
+        http_results = _search_amazon_http(query)
+        if http_results:
+            return http_results
+    except Exception as error:
+        print("⚠️ Amazon HTTP fallback failed:", error)
+
+    driver = get_driver()
     try:
         url = f"https://www.amazon.in/s?k={query.replace(' ', '+')}"
         driver.get(url)
@@ -83,31 +159,7 @@ def search_amazon_selenium(query):
             )
         )
         soup = BeautifulSoup(driver.page_source, "html.parser")
-        items = soup.select("div[data-component-type='s-search-result']")
-
-        for index, item in enumerate(items, start=1):
-            price_node = item.select_one(".a-price .a-offscreen")
-            rating_node = item.select_one("span.a-icon-alt")
-            review_node = item.select_one("span.a-size-base.s-underline-text")
-
-            title = _extract_title(item)
-            url = _extract_url(item)
-            price = _to_float(price_node.get_text(strip=True) if price_node else "")
-            if not title or price is None:
-                continue
-
-            results.append({
-                "store": "Amazon",
-                "title": title,
-                "url": url,
-                "price": price,
-                "rating": _to_rating(rating_node.get_text(strip=True) if rating_node else ""),
-                "reviews": _to_reviews(review_node.get_text(strip=True) if review_node else ""),
-                "position": index,
-            })
-
-            if len(results) == MAX_RESULTS:
-                break
+        results = _collect_results_from_soup(soup)
 
     finally:
         driver.quit()

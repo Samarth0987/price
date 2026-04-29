@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useLayoutEffect, useState } from 'react';
 
 // Default online shopping stores
 const MOCK_STORES = [
@@ -18,13 +18,14 @@ const getSentimentLabel = (rating, reviewCount) => {
 
 function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' }) {
   const storeCatalog = propsStores || MOCK_STORES;
+  const normalizedSearch = search.trim();
   const [selectedStores, setSelectedStores] = useState([]);
   const [products, setProducts] = useState([]);
   const [stores, setStores] = useState(storeCatalog);
   const [loading, setLoading] = useState(true);
   const [showNotification, setShowNotification] = useState(false);
   const [notificationCount, setNotificationCount] = useState(0);
-  const [debouncedSearch, setDebouncedSearch] = useState(search);
+  const [debouncedSearch, setDebouncedSearch] = useState(normalizedSearch);
 
   useEffect(() => {
     setStores(storeCatalog);
@@ -33,19 +34,38 @@ function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' })
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
-      setDebouncedSearch(search);
+      setDebouncedSearch(normalizedSearch);
     }, 700);
 
     return () => clearTimeout(timeoutId);
-  }, [search]);
+  }, [normalizedSearch]);
+
+  useLayoutEffect(() => {
+    if (!debouncedSearch && normalizedSearch) {
+      setLoading(true);
+    }
+  }, [debouncedSearch, normalizedSearch]);
 
   // Fetch products + review data from Python backend whenever search changes
   useEffect(() => {
+    if (!debouncedSearch) {
+      if (normalizedSearch) {
+        setLoading(true);
+        return undefined;
+      }
+
+      setProducts([]);
+      setStores(storeCatalog);
+      setSelectedStores(storeCatalog.map((store) => store.name));
+      setLoading(false);
+      return undefined;
+    }
+
     const controller = new AbortController();
     const run = async () => {
       setLoading(true);
 
-      const query = debouncedSearch && debouncedSearch.trim().length > 0 ? debouncedSearch.trim() : 'Sample Product';
+      const query = debouncedSearch;
       try {
         const res = await fetch(
           `http://localhost:8002/api/reviews?query=${encodeURIComponent(query)}`,
@@ -96,7 +116,7 @@ function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' })
     run();
 
     return () => controller.abort();
-  }, [debouncedSearch, storeCatalog]);
+  }, [debouncedSearch, normalizedSearch, storeCatalog]);
 
   // Toggle store filter
   const toggleStoreFilter = (storeName) => {
@@ -124,6 +144,8 @@ function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' })
   const filteredProducts = products.filter(
     p => p.offers.some(offer => selectedStores.includes(offer.store))
   );
+  const isWaitingForSearch = !debouncedSearch && normalizedSearch.length > 0;
+  const isLoadingView = loading || isWaitingForSearch;
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f9fafb' }}>
@@ -156,7 +178,7 @@ function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' })
         borderBottom: '1px solid #e5e7eb'
       }}>
         <div style={{ fontSize: '0.95rem', color: '#64748b', fontWeight: '500' }}>
-          {loading ? "Loading..." : `${filteredProducts.length} products found`}
+          {isLoadingView ? "Loading..." : `${filteredProducts.length} products found`}
         </div>
       </div>
 
@@ -207,7 +229,7 @@ function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' })
         maxWidth: '1400px',
         margin: '0 auto'
       }}>
-        {!loading && filteredProducts.map(product => {
+        {!isLoadingView && filteredProducts.map(product => {
           const displayOffers = (product.offers || [])
             .filter(offer => selectedStores.includes(offer.store))
             .sort((a, b) => stores.findIndex(store => store.name === a.store) - stores.findIndex(store => store.name === b.store));
@@ -374,7 +396,7 @@ function ComparePage({ onAddToCart, setPage, STORES: propsStores, search = '' })
       </div>
 
       {/* No Products Message */}
-      {!loading && filteredProducts.length === 0 && (
+      {!isLoadingView && filteredProducts.length === 0 && (
         <div style={{
           textAlign: 'center',
           padding: '4rem 1.5rem',

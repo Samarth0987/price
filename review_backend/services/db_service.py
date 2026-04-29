@@ -1,10 +1,14 @@
 from database.supabase_client import supabase
 from datetime import datetime
 
+db_writes_disabled = False
+
+
 def save_products(query: str, items: list):
     """
     Save scraped product data into Supabase
     """
+    global db_writes_disabled
 
     if not items:
         print("No data to save")
@@ -26,6 +30,9 @@ def save_products(query: str, items: list):
         except Exception as e:
             print("Error formatting item:", e)
 
+    if db_writes_disabled:
+        return
+
     if not supabase:
         print("Supabase client unavailable, skipping database save")
         return
@@ -35,4 +42,5 @@ def save_products(query: str, items: list):
         print("✅ Data inserted successfully")
         return response
     except Exception as e:
-        print("❌ Database insert error:", e)
+        db_writes_disabled = True
+        print("❌ Database insert error, disabling future DB writes:", e)

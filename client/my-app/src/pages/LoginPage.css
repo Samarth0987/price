@@ -1,0 +1,246 @@
+.loginpage-shell {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 4rem;
+  position: relative;
+}
+
+.loginpage-hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: 28px;
+  padding: 3.25rem 3rem;
+  margin-bottom: 1.75rem;
+  background:
+    radial-gradient(circle at top right, rgba(255, 214, 102, 0.22), transparent 30%),
+    linear-gradient(135deg, #102542 0%, #173d6b 45%, #1f6aa5 100%);
+  color: #f7fbff;
+  box-shadow: 0 28px 60px rgba(16, 37, 66, 0.26);
+}
+
+.loginpage-hero-copy {
+  position: relative;
+  z-index: 2;
+  max-width: 680px;
+}
+
+.loginpage-eyebrow {
+  margin: 0 0 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: #ffd666;
+}
+
+.loginpage-title {
+  margin: 0;
+  font-size: clamp(2.1rem, 4vw, 3.4rem);
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+}
+
+.loginpage-subtitle {
+  margin: 1rem 0 0;
+  max-width: 580px;
+  font-size: 1.05rem;
+  line-height: 1.7;
+  color: rgba(247, 251, 255, 0.86);
+}
+
+.loginpage-orbit {
+  position: absolute;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  pointer-events: none;
+}
+
+.loginpage-orbit-one {
+  width: 260px;
+  height: 260px;
+  right: -40px;
+  top: -30px;
+}
+
+.loginpage-orbit-two {
+  width: 380px;
+  height: 380px;
+  right: 90px;
+  bottom: -250px;
+}
+
+.loginpage-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
+  gap: 1.25rem;
+  align-items: stretch;
+}
+
+.loginpage-state,
+.loginpage-benefits {
+  background: rgba(255, 255, 255, 0.94);
+  border-radius: 24px;
+  border: 1px solid rgba(16, 37, 66, 0.08);
+  box-shadow: 0 18px 40px rgba(22, 44, 74, 0.12);
+}
+
+.loginpage-state {
+  padding: 2rem;
+}
+
+.loginpage-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.45rem 0.8rem;
+  border-radius: 999px;
+  background: rgba(31, 106, 165, 0.1);
+  color: #1f6aa5;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.loginpage-badge.success {
+  background: rgba(14, 124, 83, 0.12);
+  color: #0e7c53;
+}
+
+.loginpage-card-title {
+  margin: 1rem 0 0;
+  font-size: 2rem;
+  line-height: 1.1;
+  color: #102542;
+}
+
+.loginpage-copy {
+  margin: 1rem 0 0;
+  color: #4f627c;
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.loginpage-tip,
+.loginpage-error {
+  margin-top: 1.2rem;
+  border-radius: 16px;
+  padding: 0.95rem 1rem;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.loginpage-tip {
+  background: rgba(31, 106, 165, 0.08);
+  color: #275b88;
+}
+
+.loginpage-error {
+  background: rgba(176, 33, 74, 0.1);
+  color: #8f123f;
+  border: 1px solid rgba(176, 33, 74, 0.16);
+}
+
+.loginpage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-top: 1.5rem;
+}
+
+.loginpage-primary-btn,
+.loginpage-secondary-btn {
+  min-height: 52px;
+  border-radius: 16px;
+  padding: 0.95rem 1.35rem;
+  border: none;
+  font-size: 1rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+
+.loginpage-primary-btn {
+  background: linear-gradient(135deg, #ef5b2b 0%, #ff8f1f 100%);
+  color: #fffef8;
+  box-shadow: 0 16px 28px rgba(239, 91, 43, 0.28);
+}
+
+.loginpage-secondary-btn {
+  background: #eef5fb;
+  color: #123055;
+}
+
+.loginpage-primary-btn:hover,
+.loginpage-secondary-btn:hover {
+  transform: translateY(-2px);
+}
+
+.loginpage-primary-btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+  transform: none;
+}
+
+.loginpage-benefits {
+  padding: 1.2rem;
+  display: grid;
+  gap: 0.95rem;
+}
+
+.loginpage-benefit {
+  padding: 1rem;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(244, 248, 252, 0.96), rgba(234, 242, 249, 0.92));
+}
+
+.loginpage-benefit h3 {
+  margin: 0.85rem 0 0.45rem;
+  color: #102542;
+  font-size: 1.02rem;
+}
+
+.loginpage-benefit p {
+  margin: 0;
+  color: #53667f;
+  line-height: 1.6;
+}
+
+.loginpage-benefit-icon {
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #102542;
+  color: #fff;
+  font-weight: 800;
+}
+
+@media (max-width: 900px) {
+  .loginpage-card {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .loginpage-shell {
+    padding: 1.5rem 1rem 3rem;
+  }
+
+  .loginpage-hero {
+    padding: 2rem 1.35rem;
+  }
+
+  .loginpage-state {
+    padding: 1.35rem;
+  }
+
+  .loginpage-card-title {
+    font-size: 1.6rem;
+  }
+
+  .loginpage-actions {
+    flex-direction: column;
+  }
+}

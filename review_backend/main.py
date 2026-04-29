@@ -253,6 +253,50 @@ def build_product_groups(query: str, results: List[dict]) -> List[Product]:
     if not any(results_by_store.values()):
         return []
 
+    if not is_specific_query(query):
+        ordered_results = {
+            store: sorted(
+                items,
+                key=lambda item: int(item.get("position", 999) or 999),
+            )
+            for store, items in results_by_store.items()
+        }
+        max_groups = int(os.getenv("MAX_PRODUCT_GROUPS", "12"))
+        available_group_count = max((len(items) for items in ordered_results.values()), default=0)
+        groups = []
+
+        for group_index in range(min(max_groups, available_group_count)):
+            group_by_store = {}
+            for store in SUPPORTED_STORES:
+                store_items = ordered_results.get(store, [])
+                if group_index < len(store_items):
+                    group_by_store[store] = store_items[group_index]
+
+            if not group_by_store:
+                continue
+
+            group_items = list(group_by_store.values())
+            anchor = max(
+                group_items,
+                key=lambda item: (
+                    query_match_score(query, item),
+                    -int(item.get("position", 999) or 999),
+                ),
+            )
+            offers = [
+                build_offer(group_by_store[store]) if store in group_by_store else build_unavailable_offer(store)
+                for store in SUPPORTED_STORES
+            ]
+            groups.append(
+                Product(
+                    product_id=group_index + 1,
+                    name=build_product_name(query, group_items, anchor),
+                    offers=offers,
+                )
+            )
+
+        return groups
+
     available_keys = {
         item_key(item)
         for items in results_by_store.values()
@@ -319,6 +363,24 @@ def build_offer(item: dict) -> Offer:
     )
 
 
+def has_live_offers(products: List[Product]) -> bool:
+    return any(
+        offer.available and offer.price is not None
+        for product in products
+        for offer in product.offers
+    )
+
+
+def has_full_store_coverage(products: List[Product]) -> bool:
+    covered_stores = {
+        offer.store
+        for product in products
+        for offer in product.offers
+        if offer.available and offer.price is not None
+    }
+    return all(store in covered_stores for store in SUPPORTED_STORES)
+
+
 def build_product_offers(query: str, results: List[dict]) -> List[Product]:
     products = build_product_groups(query, results)
     available_offers = [
@@ -346,17 +408,22 @@ def build_product_offers(query: str, results: List[dict]) -> List[Product]:
 def fetch_reviews_from_sites(query: str):
     normalized_query = query.strip().lower()
     cached_entry = QUERY_CACHE.get(normalized_query)
-    if cached_entry and time.time() - cached_entry["timestamp"] < CACHE_TTL_SECONDS:
+    if (
+        cached_entry
+        and time.time() - cached_entry["timestamp"] < CACHE_TTL_SECONDS
+        and has_full_store_coverage(cached_entry["products"])
+    ):
         return cached_entry["products"]
 
     results = []
-    scrape_timeout = float(os.getenv("SCRAPE_TIMEOUT_SECONDS", "12"))
-    executor = concurrent.futures.ThreadPoolExecutor()
+    scrape_timeout = float(os.getenv("SCRAPE_TIMEOUT_SECONDS", "28"))
+    # Too many concurrent headless browsers make non-Amazon stores flaky.
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
     futures = [
         executor.submit(search_amazon_selenium, query),
+        executor.submit(search_ajio_selenium, query),
         executor.submit(search_flipkart_selenium, query),
         executor.submit(search_myntra_selenium, query),
-        executor.submit(search_ajio_selenium, query),
     ]
 
     # 🚀 Parallel scraping with a cap so one stuck scraper doesn't block the API forever.
@@ -379,6 +446,11 @@ def fetch_reviews_from_sites(query: str):
         print(f"⚠️ Scraper timeout after {scrape_timeout}s, using partial/fallback results")
 
     executor.shutdown(wait=False, cancel_futures=True)
+    store_counts = {
+        store: sum(1 for item in results if item.get("store") == store)
+        for store in SUPPORTED_STORES
+    }
+    print(f"🧾 Scraper counts for '{query}': {store_counts}")
 
     # 💾 Save data to Supabase
     if results:
@@ -388,10 +460,13 @@ def fetch_reviews_from_sites(query: str):
             print("❌ Database error:", e)
 
     products = build_product_offers(query, results)
-    QUERY_CACHE[normalized_query] = {
-        "timestamp": time.time(),
-        "products": products,
-    }
+    if has_full_store_coverage(products):
+        QUERY_CACHE[normalized_query] = {
+            "timestamp": time.time(),
+            "products": products,
+        }
+    else:
+        QUERY_CACHE.pop(normalized_query, None)
     return products
 
 

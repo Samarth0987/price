@@ -10,6 +10,8 @@ def get_driver():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+    options.add_argument("--disable-notifications")
+    options.add_argument("--blink-settings=imagesEnabled=false")
     options.add_argument("--window-size=1440,2200")
     options.add_argument(
         "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -17,6 +19,13 @@ def get_driver():
     )
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
+    options.add_experimental_option(
+        "prefs",
+        {
+            "profile.default_content_setting_values.notifications": 2,
+            "profile.managed_default_content_settings.images": 2,
+        },
+    )
 
     driver = webdriver.Chrome(options=options)
     driver.set_page_load_timeout(25)

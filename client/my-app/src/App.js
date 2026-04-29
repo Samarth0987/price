@@ -4,10 +4,11 @@ import Spinner from "./components/Spinner";
 import HomePage from "./pages/HomePage";
 import ComparePage from "./pages/ComparePage";
 import CartPage from "./pages/CartPage";
+import LoginPage from "./pages/LoginPage";
 import "./App.css";
 
 // --- SUPABASE IMPORTS ---
-import { supabase } from "./supabaseClient";
+import { loginWithGoogle, logoutUser, supabase } from "./supabaseClient";
 
 // Define STORES globally with URLs (general online shopping)
 const STORES = [
@@ -18,24 +19,42 @@ const STORES = [
 ];
 
 function App() {
-  const [page, setPage] = useState("home"); // 'home', 'compare', 'cart'
+  const [page, setPage] = useState("home"); // 'home', 'compare', 'cart', 'login'
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [cart, setCart] = useState([]);
   const [user, setUser] = useState(null); // Track User state
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState("");
+
+  const navigateTo = (nextPage) => {
+    if (nextPage !== "login") {
+      setAuthError("");
+    }
+    setPage(nextPage);
+  };
 
   // --- 1. LISTEN FOR LOGIN / LOGOUT VIA SUPABASE ---
   useEffect(() => {
     let mounted = true;
 
     const initAuth = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
 
-      if (!mounted) return;
-      setUser(session?.user ?? null);
-      setLoading(false);
+        if (!mounted) return;
+        setUser(session?.user ?? null);
+      } catch (error) {
+        console.error("Failed to restore Supabase session", error);
+        if (!mounted) return;
+        setUser(null);
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
 
       // (Optional) Here you could load a saved cart from Supabase if implemented
     };
@@ -47,6 +66,7 @@ function App() {
     } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
       setUser(session?.user ?? null);
+      setAuthError("");
 
       if (!session) {
         setCart([]);
@@ -81,26 +101,65 @@ function App() {
     });
   };
 
+  const handleLogin = async () => {
+    setAuthBusy(true);
+    setAuthError("");
+
+    try {
+      await loginWithGoogle();
+    } catch (error) {
+      setAuthError(
+        error?.message || "Login start nahi ho paya. Supabase config check karo."
+      );
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    setAuthBusy(true);
+    setAuthError("");
+
+    try {
+      await logoutUser();
+      setPage("home");
+    } catch (error) {
+      setAuthError(error?.message || "Logout fail ho gaya.");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
   return (
     <div className="App">
       {/* HeaderBar receives user prop */}
       <HeaderBar
         search={search}
         setSearch={setSearch}
-        setPage={setPage}
+        setPage={navigateTo}
         cartCount={cart.length}
-        user={user} 
+        user={user}
+        authBusy={authBusy}
+        onLogout={handleLogout}
       />
 
       <main className="main-content">
         {loading ? (
           <Spinner />
         ) : page === "home" ? (
-          <HomePage setPage={setPage} />
+          <HomePage setPage={navigateTo} />
+        ) : page === "login" ? (
+          <LoginPage
+            user={user}
+            setPage={navigateTo}
+            onLogin={handleLogin}
+            authBusy={authBusy}
+            authError={authError}
+          />
         ) : page === "compare" ? (
           <ComparePage
             onAddToCart={handleAddToCart}
-            setPage={setPage}
+            setPage={navigateTo}
             STORES={STORES}
             search={search}
           />
@@ -108,7 +167,7 @@ function App() {
           <CartPage
             cart={cart}
             setCart={setCart}
-            setPage={setPage}
+            setPage={navigateTo}
             STORES={STORES}
           />
         ) : null}
