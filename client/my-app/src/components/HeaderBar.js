@@ -1,6 +1,19 @@
 import React from "react";
 import "./HeaderBar.css";
 
+const getUserLabel = (user) =>
+  user?.user_metadata?.full_name ||
+  user?.user_metadata?.name ||
+  user?.email?.split("@")[0] ||
+  user?.phone ||
+  "User";
+
+const getUserInitial = (user) => {
+  const label = getUserLabel(user);
+  const match = label.match(/[a-z0-9]/i);
+  return (match?.[0] || "U").toUpperCase();
+};
+
 // Receive 'user' as a prop now
 function HeaderBar({
   search,
@@ -83,14 +96,13 @@ function HeaderBar({
           <div className="headerbar-auth-block">
             {user ? (
               <div className="user-section">
-                {user.user_metadata?.avatar_url && (
-                  <img
-                    src={user.user_metadata.avatar_url}
-                    alt="User"
-                    className="headerbar-avatar"
-                    title={user.user_metadata.full_name || user.email}
-                  />
-                )}
+                <span
+                  className="headerbar-user-initial"
+                  title={getUserLabel(user)}
+                  aria-label={`Signed in as ${getUserLabel(user)}`}
+                >
+                  {getUserInitial(user)}
+                </span>
                 <button
                   className="headerbar-btn"
                   onClick={onLogout}
