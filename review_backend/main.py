@@ -32,6 +32,18 @@ GENERIC_PRODUCT_TOKENS = {
     "sports", "steel", "stainless", "strap", "style", "toned", "unisex",
     "watch", "watches", "white", "women", "wrist", "youth",
 }
+PHONE_QUERY_TOKENS = {
+    "iphone", "mobile", "phone", "phones", "smartphone", "smartphones",
+    "samsung", "galaxy", "pixel", "oneplus", "redmi", "realme", "oppo",
+    "vivo", "nothing",
+}
+PHONE_ACCESSORY_TOKENS = {
+    "adapter", "back", "cable", "case", "charger", "charging", "connector",
+    "cover", "finewoven", "glass", "guard", "holder", "lightning", "magsafe",
+    "protector", "safe", "screen", "skin", "tempered", "type", "wallet",
+}
+IPHONE_VARIANT_TOKENS = {"air", "e", "max", "mini", "plus", "pro", "se"}
+STORAGE_TOKENS = {"gb", "tb"}
 
 class Offer(BaseModel):
     store: str
@@ -95,6 +107,147 @@ def informative_tokens(text: str) -> List[str]:
     return longer_tokens or tokens
 
 
+def has_phone_query_intent(query: str) -> bool:
+    return bool(set(tokenize(query)) & PHONE_QUERY_TOKENS)
+
+
+def has_strong_product_intent(query: str) -> bool:
+    return is_specific_query(query) or has_phone_query_intent(query)
+
+
+def is_likely_phone_accessory(title: str) -> bool:
+    return bool(set(tokenize(title)) & PHONE_ACCESSORY_TOKENS)
+
+
+def item_matches_query_intent(query: str, item: dict) -> bool:
+    title = item.get("title", "")
+    title_tokens = set(tokenize(title))
+    query_tokens = set(tokenize(query))
+
+    if not query_tokens:
+        return True
+
+    if has_phone_query_intent(query):
+        if is_likely_phone_accessory(title):
+            return False
+        return bool(title_tokens & (query_tokens | PHONE_QUERY_TOKENS))
+
+    return True
+
+
+def filter_results_for_query_intent(query: str, results: List[dict]) -> List[dict]:
+    filtered = [item for item in results if item_matches_query_intent(query, item)]
+    removed_count = len(results) - len(filtered)
+    if removed_count:
+        print(f"🧹 Filtered {removed_count} off-intent/accessory results for '{query}'")
+    return filtered
+
+
+def extract_iphone_signature(title: str) -> Optional[dict]:
+    tokens = tokenize(title)
+    if "iphone" not in tokens:
+        return None
+
+    iphone_index = tokens.index("iphone")
+    generation = None
+    variants = set()
+    storage = None
+
+    for offset, token in enumerate(tokens[iphone_index + 1:], start=iphone_index + 1):
+        if token in STORAGE_TOKENS:
+            if offset > 0 and re.fullmatch(r"\d+", tokens[offset - 1]):
+                storage = f"{tokens[offset - 1]}{token}"
+            break
+        if re.fullmatch(r"\d+(?:[a-z])?", token):
+            generation = re.match(r"\d+", token).group(0)
+            suffix = token[len(generation):]
+            if suffix:
+                variants.add(suffix)
+            continue
+        if token in IPHONE_VARIANT_TOKENS:
+            if generation is None and token in {"air", "se"}:
+                generation = token
+            variants.add(token)
+            continue
+        if generation is not None:
+            break
+
+    return {
+        "brand": "iphone",
+        "generation": generation,
+        "variants": variants,
+        "storage": storage,
+    }
+
+
+def product_identity_key(item: dict) -> str:
+    iphone_signature = extract_iphone_signature(item.get("title", ""))
+    if iphone_signature:
+        variants = "-".join(sorted(iphone_signature["variants"])) or "base"
+        generation = iphone_signature["generation"] or "unknown"
+        storage = iphone_signature["storage"] or "unknown"
+        return f"iphone::{generation}::{variants}::{storage}"
+
+    return "tokens::" + "::".join(sorted(set(informative_tokens(item.get("title", "")))))
+
+
+def dedupe_results_for_query(query: str, results: List[dict]) -> List[dict]:
+    if not has_strong_product_intent(query):
+        return results
+
+    best_by_store_and_identity = {}
+    for item in results:
+        key = (item.get("store"), product_identity_key(item))
+        existing = best_by_store_and_identity.get(key)
+        if not existing:
+            best_by_store_and_identity[key] = item
+            continue
+
+        item_rank = (
+            query_match_score(query, item),
+            -float(item.get("price", 0) or 0),
+            -int(item.get("position", 999) or 999),
+        )
+        existing_rank = (
+            query_match_score(query, existing),
+            -float(existing.get("price", 0) or 0),
+            -int(existing.get("position", 999) or 999),
+        )
+        if item_rank > existing_rank:
+            best_by_store_and_identity[key] = item
+
+    deduped = list(best_by_store_and_identity.values())
+    removed_count = len(results) - len(deduped)
+    if removed_count:
+        print(f"🧽 Deduped {removed_count} repeated variants for '{query}'")
+    return deduped
+
+
+def product_signatures_compatible(anchor: dict, item: dict) -> bool:
+    anchor_iphone = extract_iphone_signature(anchor.get("title", ""))
+    item_iphone = extract_iphone_signature(item.get("title", ""))
+
+    if not anchor_iphone or not item_iphone:
+        return True
+
+    anchor_generation = anchor_iphone["generation"]
+    item_generation = item_iphone["generation"]
+    if anchor_generation and item_generation and anchor_generation != item_generation:
+        return False
+
+    anchor_storage = anchor_iphone["storage"]
+    item_storage = item_iphone["storage"]
+    if anchor_storage and item_storage and anchor_storage != item_storage:
+        return False
+
+    anchor_variants = anchor_iphone["variants"]
+    item_variants = item_iphone["variants"]
+    if anchor_variants and item_variants and anchor_variants != item_variants:
+        return False
+
+    return True
+
+
 def jaccard_similarity(left_tokens: List[str], right_tokens: List[str]) -> float:
     left = set(left_tokens)
     right = set(right_tokens)
@@ -145,6 +298,10 @@ def item_key(item: dict) -> str:
 
 
 def combined_match_score(query: str, anchor: dict, item: dict) -> float:
+    if not item_matches_query_intent(query, item):
+        return 0.0
+    if not product_signatures_compatible(anchor, item):
+        return 0.0
     return (0.65 * pair_match_score(anchor, item)) + (0.35 * query_match_score(query, item))
 
 
@@ -195,11 +352,13 @@ def build_results_by_store(results: List[dict]) -> dict:
 
 
 def select_best_matches(query: str, results: List[dict]) -> dict:
+    results = filter_results_for_query_intent(query, results)
+    results = dedupe_results_for_query(query, results)
     results_by_store = build_results_by_store(results)
     if not any(results_by_store.values()):
         return {}
 
-    if not is_specific_query(query):
+    if not has_strong_product_intent(query):
         selected = {}
         for store, items in results_by_store.items():
             if not items:
@@ -242,18 +401,20 @@ def build_product_name(query: str, group_items: List[dict], anchor: Optional[dic
     if not titles:
         return query
 
-    if is_specific_query(query):
+    if has_strong_product_intent(query):
         return max(titles, key=len)
 
     return max(titles, key=lambda title: query_match_score(query, {"title": title, "position": 1}))
 
 
 def build_product_groups(query: str, results: List[dict]) -> List[Product]:
+    results = filter_results_for_query_intent(query, results)
+    results = dedupe_results_for_query(query, results)
     results_by_store = build_results_by_store(results)
     if not any(results_by_store.values()):
         return []
 
-    if not is_specific_query(query):
+    if not has_strong_product_intent(query):
         ordered_results = {
             store: sorted(
                 items,
@@ -304,7 +465,7 @@ def build_product_groups(query: str, results: List[dict]) -> List[Product]:
     }
     groups = []
     max_groups = int(os.getenv("MAX_PRODUCT_GROUPS", "12"))
-    match_threshold = 0.2 if is_specific_query(query) else 0.12
+    match_threshold = 0.2 if has_strong_product_intent(query) else 0.12
     product_id = 1
 
     while available_keys and len(groups) < max_groups:
